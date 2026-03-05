@@ -9,7 +9,6 @@ export interface ERC8004Agent {
   registeredAt: number;
 }
 
-// ERC-8004 Identity Registry ABI - both for reading and event scanning
 const REGISTRY_ABI = parseAbi([
   'function getAgent(address agent) view returns (uint256 agentId, string name, string endpoint, uint256 registeredAt)',
   'function isRegistered(address agent) view returns (bool)',
@@ -20,6 +19,7 @@ const REGISTRY_ABI = parseAbi([
 
 /**
  * Crawl the ERC-8004 Identity Registry on Base mainnet for registered agents.
+ * Uses chunked log queries to avoid 413 errors from RPC.
  */
 export async function crawlERC8004(
   registryAddress: string = '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432',
@@ -27,7 +27,6 @@ export async function crawlERC8004(
 ): Promise<ERC8004Agent[]> {
   console.log('[erc8004] Starting on-chain crawl...');
   console.log(`  [erc8004] Registry: ${registryAddress}`);
-  console.log(`  [erc8004] RPC: ${rpcUrl}`);
 
   const agents: ERC8004Agent[] = [];
 
@@ -36,81 +35,51 @@ export async function crawlERC8004(
     transport: http(rpcUrl),
   });
 
-  // Strategy 1: Try to get totalAgents and iterate
-  try {
-    const totalAgents = await client.readContract({
-      address: registryAddress as Address,
-      abi: REGISTRY_ABI,
-      functionName: 'totalAgents',
-    });
-
-    console.log(`  [erc8004] Registry reports ${totalAgents} total agent(s)`);
-
-    if (totalAgents > 0n) {
-      console.log(`  [erc8004] Note: Cannot iterate without getAgentByIndex, falling back to event scan`);
-    }
-  } catch (err: any) {
-    console.log(`  [erc8004] totalAgents() not available: ${err.message?.slice(0, 100)}`);
-  }
-
-  // Strategy 2: Scan for AgentRegistered events
+  // Scan for AgentRegistered events in chunks of 10k blocks
   try {
     const currentBlock = await client.getBlockNumber();
-    // Scan last 500k blocks (~2 weeks on Base)
-    const fromBlock = currentBlock > 500000n ? currentBlock - 500000n : 0n;
+    const CHUNK_SIZE = 10000n;
+    // Scan last ~100k blocks (~4 days on Base at ~2s blocks)
+    const startBlock = currentBlock > 100000n ? currentBlock - 100000n : 0n;
 
-    console.log(`  [erc8004] Scanning events from block ${fromBlock} to ${currentBlock}...`);
+    console.log(`  [erc8004] Scanning blocks ${startBlock}–${currentBlock} in chunks of ${CHUNK_SIZE}...`);
 
-    const logs = await client.getLogs({
-      address: registryAddress as Address,
-      event: REGISTRY_ABI[3], // AgentRegistered event
-      fromBlock,
-      toBlock: currentBlock,
-    });
-
-    console.log(`  [erc8004] Found ${logs.length} AgentRegistered event(s)`);
-
-    for (const log of logs) {
-      const args = log.args as any;
-      if (args) {
-        agents.push({
-          address: args.agent || '',
-          agentId: (args.agentId || 0n).toString(),
-          name: args.name || '',
-          endpoint: args.endpoint || '',
-          registeredAt: 0, // Would need block timestamp
+    for (let from = startBlock; from <= currentBlock; from += CHUNK_SIZE) {
+      const to = from + CHUNK_SIZE - 1n > currentBlock ? currentBlock : from + CHUNK_SIZE - 1n;
+      try {
+        const logs = await client.getLogs({
+          address: registryAddress as Address,
+          event: REGISTRY_ABI[3], // AgentRegistered
+          fromBlock: from,
+          toBlock: to,
         });
+
+        for (const log of logs) {
+          const args = log.args as any;
+          if (args) {
+            agents.push({
+              address: args.agent || '',
+              agentId: (args.agentId || 0n).toString(),
+              name: args.name || '',
+              endpoint: args.endpoint || '',
+              registeredAt: 0,
+            });
+          }
+        }
+      } catch (err: any) {
+        // Skip chunk on error
+        console.log(`  [erc8004] Chunk ${from}–${to} failed: ${err.message?.slice(0, 80)}`);
       }
     }
 
-    // Also scan for AgentUpdated to get latest info
-    try {
-      const updateLogs = await client.getLogs({
-        address: registryAddress as Address,
-        event: REGISTRY_ABI[4], // AgentUpdated event
-        fromBlock,
-        toBlock: currentBlock,
-      });
-
-      for (const log of updateLogs) {
-        const args = log.args as any;
-        if (args?.agent) {
-          const existing = agents.find(a => a.address.toLowerCase() === args.agent.toLowerCase());
-          if (existing) {
-            if (args.name) existing.name = args.name;
-            if (args.endpoint) existing.endpoint = args.endpoint;
-          }
-        }
-      }
-    } catch { /* AgentUpdated may not exist */ }
-
+    console.log(`  [erc8004] Found ${agents.length} agent(s) from events`);
   } catch (err: any) {
     console.log(`  [erc8004] Event scan failed: ${err.message?.slice(0, 200)}`);
   }
 
-  // Strategy 3: Check some well-known agent addresses
+  // Also check known addresses
   const knownAddresses: Address[] = [
-    '0xD6Ae8D2F816EE123E77D1D698f8a3873A563CB5F', // cred402 treasury
+    '0xD6Ae8D2F816EE123E77D1D698f8a3873A563CB5F',
   ];
 
   for (const addr of knownAddresses) {
@@ -141,7 +110,7 @@ export async function crawlERC8004(
     } catch { /* skip */ }
   }
 
-  // Deduplicate by address
+  // Deduplicate
   const seen = new Set<string>();
   const unique = agents.filter(a => {
     const key = a.address.toLowerCase();
