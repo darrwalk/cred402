@@ -1,12 +1,17 @@
 import { Router, Request, Response } from 'express';
 import { isAddress, getAddress } from 'viem';
-import { getAgentProfile } from '../services/scorer';
+import { getAgentScore } from '../services/scorer';
 import { freeTierRateLimit } from '../middleware/rateLimit';
 import { x402PaymentMiddleware } from '../middleware/x402';
 import { config } from '../config';
 
 const router = Router();
 
+/**
+ * GET /v1/profile/:agent
+ * Same as /v1/score/:agent in v2 (both return full breakdown).
+ * Kept for backward compatibility.
+ */
 router.get(
   '/:agent',
   freeTierRateLimit(),
@@ -21,7 +26,7 @@ router.get(
 
     try {
       const address = getAddress(agent);
-      const result = await getAgentProfile(address);
+      const result = await getAgentScore(address);
       res.json(result);
     } catch (err) {
       console.error('Profile error:', err);
