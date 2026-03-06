@@ -5,6 +5,12 @@ import { config } from '../config';
 // Uses @coinbase/x402-express when available, falls back to manual 402 response
 export function x402PaymentMiddleware(priceUsd: string) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    // Never intercept CORS preflight
+    if (req.method === 'OPTIONS') {
+      next();
+      return;
+    }
+
     // Skip if free tier
     if ((req as any).freeTier) {
       next();
