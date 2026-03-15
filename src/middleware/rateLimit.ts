@@ -9,19 +9,25 @@ export function freeTierRateLimit() {
       return;
     }
 
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    const { allowed, remaining } = await checkRateLimit(ip);
+    try {
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
+      const { allowed, remaining } = await checkRateLimit(ip);
 
-    res.setHeader('X-RateLimit-Remaining', remaining.toString());
+      res.setHeader('X-RateLimit-Remaining', remaining.toString());
 
-    if (!allowed) {
-      // Let x402 middleware handle payment requirement
+      if (!allowed) {
+        // Let x402 middleware handle payment requirement
+        next();
+        return;
+      }
+
+      // Free tier: skip x402 payment
+      (req as any).freeTier = true;
       next();
-      return;
+    } catch (err) {
+      // If Redis is down, default to requiring payment (let x402 handle it)
+      console.error('Rate limit check failed (Redis down?), falling through to x402:', err);
+      next();
     }
-
-    // Free tier: skip x402 payment
-    (req as any).freeTier = true;
-    next();
   };
 }
