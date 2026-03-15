@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import { freeTierRateLimit } from './middleware/rateLimit';
+import { x402WithFreeTier } from './middleware/x402';
 import scoreRouter from './routes/score';
 import profileRouter from './routes/profile';
 import statusRouter from './routes/status';
@@ -9,7 +11,7 @@ import leaderboardRouter from './routes/leaderboard';
 export function createApp() {
   const app = express();
 
-  // CORS — allow landing pages and browsers
+  // CORS — allow landing pages, browsers, and x402 clients
   app.use(cors({
     origin: [
       'https://cred402.forge.dexmind.ai',
@@ -23,13 +25,19 @@ export function createApp() {
 
   app.use(express.json());
 
-  // Trust proxy for IP-based rate limiting on fly.io
+  // Trust proxy for IP-based rate limiting
   app.set('trust proxy', true);
 
   // Health endpoint (before any payment middleware)
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok', version: '2.0.0' });
   });
+
+  // Apply free-tier rate limiter, then x402 payment middleware
+  // for the paid endpoints
+  app.use('/v1/score', freeTierRateLimit());
+  app.use('/v1/profile', freeTierRateLimit());
+  app.use(x402WithFreeTier());
 
   // Routes
   app.use('/v1/score', scoreRouter);
@@ -38,7 +46,7 @@ export function createApp() {
   app.use('/v1/register', registerRouter);
   app.use('/v1/leaderboard', leaderboardRouter);
 
-  // Root redirect
+  // Root info
   app.get('/', (_req, res) => {
     res.json({
       name: 'Cred402',
