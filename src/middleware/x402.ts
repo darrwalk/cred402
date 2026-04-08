@@ -2,20 +2,18 @@ import { Request, Response, NextFunction } from 'express';
 import { paymentMiddleware, x402ResourceServer } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/server';
-import { facilitator } from '@coinbase/x402';
 import { config } from '../config';
 
 /**
- * x402 payment middleware using Coinbase CDP facilitator for real payment verification.
+ * x402 payment middleware using testnet facilitator (no API keys needed).
  *
- * - Base mainnet (eip155:8453)
+ * - Base Sepolia (eip155:84532)
  * - USDC asset
  * - $0.001 per query
  * - Free tier bypass when req.freeTier is true
- *
- * Uses @coinbase/x402 for the official CDP facilitator URL and auth.
- * Requires CDP_API_KEY_ID and CDP_API_KEY_SECRET env vars.
  */
+
+const FACILITATOR_URL = 'https://x402.org/facilitator';
 
 // Route payment configurations for x402
 const X402_ROUTES: Record<string, {
@@ -26,7 +24,7 @@ const X402_ROUTES: Record<string, {
     accepts: {
       scheme: 'exact',
       price: '$0.001',
-      network: 'eip155:8453',
+      network: 'eip155:84532',
       payTo: config.treasuryAddress,
       asset: config.usdcAddress,
     },
@@ -37,7 +35,7 @@ const X402_ROUTES: Record<string, {
     accepts: {
       scheme: 'exact',
       price: '$0.001',
-      network: 'eip155:8453',
+      network: 'eip155:84532',
       payTo: config.treasuryAddress,
       asset: config.usdcAddress,
     },
@@ -46,14 +44,14 @@ const X402_ROUTES: Record<string, {
   },
 };
 
-// Build the x402 resource server with Coinbase CDP facilitator
+// Build the x402 resource server with testnet facilitator
 let _middleware: ReturnType<typeof paymentMiddleware> | null = null;
 
 function getPaymentMiddleware() {
   if (!_middleware) {
-    const facilitatorClient = new HTTPFacilitatorClient(facilitator);
+    const facilitatorClient = new HTTPFacilitatorClient({ url: FACILITATOR_URL });
     const resourceServer = new x402ResourceServer(facilitatorClient)
-      .register('eip155:8453', new ExactEvmScheme());
+      .register('eip155:84532', new ExactEvmScheme());
 
     _middleware = paymentMiddleware(
       X402_ROUTES,
