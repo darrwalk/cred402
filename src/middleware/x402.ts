@@ -7,8 +7,8 @@ import { config } from '../config';
 /**
  * x402 payment middleware using PayAI Network facilitator (no API keys needed).
  *
- * - Base mainnet (eip155:8453)
- * - USDC asset
+ * - Base Sepolia (eip155:84532)
+ * - USDC (Sepolia) asset
  * - $0.001 per query
  * - Free tier bypass when req.freeTier is true
  */
@@ -24,7 +24,7 @@ const X402_ROUTES: Record<string, {
     accepts: {
       scheme: 'exact',
       price: '$0.001',
-      network: 'eip155:8453',
+      network: 'eip155:84532',
       payTo: config.treasuryAddress,
       asset: config.usdcAddress,
     },
@@ -35,7 +35,7 @@ const X402_ROUTES: Record<string, {
     accepts: {
       scheme: 'exact',
       price: '$0.001',
-      network: 'eip155:8453',
+      network: 'eip155:84532',
       payTo: config.treasuryAddress,
       asset: config.usdcAddress,
     },
@@ -44,14 +44,20 @@ const X402_ROUTES: Record<string, {
   },
 };
 
-// Build the x402 resource server with mainnet facilitator
+// Build the x402 resource server with PayAI facilitator
 let _middleware: ReturnType<typeof paymentMiddleware> | null = null;
 
 function getPaymentMiddleware() {
   if (!_middleware) {
+    console.log('[x402] Initializing payment middleware');
+    console.log('[x402] Facilitator URL:', FACILITATOR_URL);
+    console.log('[x402] Network: eip155:84532 (Base Sepolia)');
+    console.log('[x402] USDC:', config.usdcAddress);
+    console.log('[x402] Treasury:', config.treasuryAddress);
+
     const facilitatorClient = new HTTPFacilitatorClient({ url: FACILITATOR_URL });
     const resourceServer = new x402ResourceServer(facilitatorClient)
-      .register('eip155:8453', new ExactEvmScheme());
+      .register('eip155:84532', new ExactEvmScheme());
 
     _middleware = paymentMiddleware(
       X402_ROUTES,
@@ -71,17 +77,24 @@ function getPaymentMiddleware() {
  */
 export function x402Gate() {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    console.log(`[x402] Gate hit: ${req.method} ${req.path} | freeTier=${(req as any).freeTier}`);
+
     // Free tier bypass — set by rate limiter middleware
     if ((req as any).freeTier) {
+      console.log('[x402] Free tier bypass — skipping payment check');
       next();
       return;
     }
 
+    console.log('[x402] No free tier — invoking payment middleware');
+
     try {
       const mw = getPaymentMiddleware();
+      console.log('[x402] Middleware initialized:', mw ? 'yes' : 'no');
       await mw(req, res, next);
+      console.log(`[x402] Payment middleware completed. Response status: ${res.statusCode}`);
     } catch (err) {
-      console.error('x402 facilitator error:', err);
+      console.error('[x402] Facilitator error:', err);
       res.status(503).json({
         error: 'Payment verification service temporarily unavailable',
         message: 'The x402 facilitator is unreachable. Please try again later.',
