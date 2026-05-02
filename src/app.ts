@@ -33,9 +33,17 @@ export function createApp() {
     res.json({ status: 'ok', version: '2.0.0' });
   });
 
-  // Paid endpoints: rate limiter → x402 payment gate → route handler
-  app.use('/v1/score', freeTierRateLimit(), x402Gate(), scoreRouter);
-  app.use('/v1/profile', freeTierRateLimit(), x402Gate(), profileRouter);
+  // Rate limiter — mounted at paid path prefixes so only those endpoints are rate-limited
+  app.use('/v1/score', freeTierRateLimit());
+  app.use('/v1/profile', freeTierRateLimit());
+
+  // x402 payment gate — mounted at APP LEVEL so req.path retains full path
+  // (Express strips mount paths, but @x402 route configs use full paths like GET /v1/score/:agent)
+  app.use(x402Gate());
+
+  // Route handlers
+  app.use('/v1/score', scoreRouter);
+  app.use('/v1/profile', profileRouter);
 
   // Free endpoints
   app.use('/v1/status', statusRouter);
