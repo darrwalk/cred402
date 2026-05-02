@@ -5,15 +5,16 @@ import { HTTPFacilitatorClient } from '@x402/core/server';
 import { config } from '../config';
 
 /**
- * x402 payment middleware using xpay facilitator (no KYC, no API keys).
+ * x402 payment middleware using PayAI Network facilitator.
  *
- * - Base Mainnet (eip155:8453)
- * - USDC (Mainnet) asset
+ * - Base Sepolia testnet (eip155:84532)
+ * - USDC (testnet) asset
  * - $0.001 per query
  * - Free tier bypass when req.freeTier is true
  */
 
-const FACILITATOR_URL = 'https://facilitator.xpay.sh';
+// Use env var with fallback to payai.network (live facilitator)
+const FACILITATOR_URL = process.env.X402_FACILITATOR_URL || 'https://facilitator.payai.network';
 
 // Route payment configurations for x402
 const X402_ROUTES: Record<string, {
@@ -44,16 +45,18 @@ const X402_ROUTES: Record<string, {
   },
 };
 
-// Build the x402 resource server with xpay facilitator
+// Build the x402 resource server with PayAI Network facilitator
 let _middleware: ReturnType<typeof paymentMiddleware> | null = null;
 
 function getPaymentMiddleware() {
   if (!_middleware) {
     console.log('[x402] Initializing payment middleware');
     console.log('[x402] Facilitator URL:', FACILITATOR_URL);
+    console.log('[x402] Env X402_FACILITATOR_URL:', process.env.X402_FACILITATOR_URL || '(not set)');
     console.log('[x402] Network: eip155:84532 (Base Sepolia testnet)');
     console.log('[x402] USDC:', config.usdcAddress);
     console.log('[x402] Treasury:', config.treasuryAddress);
+    console.log('[x402] FREE_TIER_LIMIT:', process.env.FREE_TIER_LIMIT);
 
     const facilitatorClient = new HTTPFacilitatorClient({ url: FACILITATOR_URL });
     const resourceServer = new x402ResourceServer(facilitatorClient)
@@ -77,22 +80,70 @@ function getPaymentMiddleware() {
  */
 export function x402Gate() {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    console.log(`[x402] Gate hit: ${req.method} ${req.path} | freeTier=${(req as any).freeTier}`);
+    const isFree = (req as any).freeTier === true;
+    const hasPaymentHeader = !!(req.headers['x-402-payment'] || req.headers['x402-payment']);
+
+    console.log(`[x402] Gate hit: ${req.method} ${req.path} | freeTier=${isFree} | hasPaymentHeader=${hasPaymentHeader}`);
+    console.log(`[x402] Request headers: x402-payment=${req.headers['x-402-payment'] || '(none)'}, authorization=${req.headers['authorization'] ? 'present' : '(none)'}`);
 
     // Free tier bypass — set by rate limiter middleware
-    if ((req as any).freeTier) {
+    if (isFree) {
       console.log('[x402] Free tier bypass — skipping payment check');
       next();
       return;
     }
 
     console.log('[x402] No free tier — invoking payment middleware');
+    console.log('[x402] Using facilitator:', FACILITATOR_URL);
 
     try {
       const mw = getPaymentMiddleware();
       console.log('[x402] Middleware initialized:', mw ? 'yes' : 'no');
+
+      // Hook into response to capture what happens during middleware
+      const originalWrite = res.write.bind(res);
+      const originalEnd = res.end.bind(res);
+      const chunks: Buffer[] = [];
+
+      res.write = function(chunk: any, ...args: any[]) {
+        if (chunk) {
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          chunks.push(buf);
+        }
+        return originalWrite(chunk, ...args);
+      } as typeof res.write;
+
+      res.end = function(chunk: any, ...args: any[]) {
+        if (chunk) {
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          chunks.push(buf);
+        }
+        return originalEnd(chunk, ...args);
+      } as typeof res.end;
+
+      // Save status before middleware
+      const statusBefore = res.statusCode;
+      console.log(`[x402] Status BEFORE middleware: ${statusBefore}`);
+
       await mw(req, res, next);
-      console.log(`[x402] Payment middleware completed. Response status: ${res.statusCode}`);
+
+      // Status after middleware
+      const statusAfter = res.statusCode;
+      const headersAfter = JSON.stringify(res.getHeaders());
+      console.log(`[x402] Payment middleware completed.`);
+      console.log(`[x402] Status: BEFORE=${statusBefore} → AFTER=${statusAfter}`);
+      console.log(`[x402] Response headers after: ${headersAfter}`);
+
+      // If middleware returned 200 (should have been 402), log evidence
+      if (statusAfter === 200 && !isFree && !hasPaymentHeader) {
+        console.error('[x402] ⚠️  BUG: Payment middleware returned 200 but no payment header present and free tier is exhausted!');
+        console.error(`[x402] This means the x402 middleware did NOT enforce payment.`);
+        console.error(`[x402] Debug: facilitator=${FACILITATOR_URL}, freeTier=${isFree}, payHeader=${hasPaymentHeader}`);
+        if (chunks.length > 0) {
+          const body = Buffer.concat(chunks).toString('utf-8').slice(0, 500);
+          console.error(`[x402] Response body (first 500 chars): ${body}`);
+        }
+      }
     } catch (err) {
       console.error('[x402] Facilitator error:', err);
       res.status(503).json({
