@@ -7,6 +7,7 @@ import profileRouter from './routes/profile';
 import statusRouter from './routes/status';
 import registerRouter from './routes/register';
 import leaderboardRouter from './routes/leaderboard';
+import { BUILD_ID } from './config';
 
 export function createApp() {
   const app = express();
@@ -30,7 +31,7 @@ export function createApp() {
 
   // Health endpoint (no auth, no payment)
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', version: '2.0.0' });
+    res.json({ status: 'ok', version: '2.0.0', build: BUILD_ID });
   });
 
   // Rate limiter — mounted at paid path prefixes so only those endpoints are rate-limited

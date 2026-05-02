@@ -19,3 +19,5 @@ export const config = {
   // 1000 = $0.001
   priceUsdc: '1000',
 } as const;
+// Build identifier injected at deploy time
+export const BUILD_ID = process.env.BUILD_ID || `dev-${new Date().toISOString().replace(/[:.]/g, '-')}`;
